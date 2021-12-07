@@ -1,0 +1,133 @@
+#!/bin/bash
+
+# HOME path
+HOME=/home/rohanhasabe8/cunt
+# Kernel Output
+OUT_DIR=out
+if [[ "$@" =~ "miui"* ]]; then
+	VERSION="MIUI-0.5.z"
+else
+	VERSION="REL-0.5.z"
+fi
+DEVICE=alioth
+DATE=$(date +"%d.%m.%y.%S")
+ZIPNAME=IMMENSITY-X-${DEVICE}-${VERSION}-${DATE}.zip
+
+# Set compiler PATH
+PATH=${HOME}/linux-x86/clang-r433403/bin/:${HOME}/gas64/bin:${HOME}/gas32/bin:$PATH
+
+# Correct panel dimensions on MIUI builds
+function miui_fix_dimens()
+{
+	sed -i 's/<70>/<695>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j3s-37-02-0a-dsc-video.dtsi
+	sed -i 's/<70>/<695>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j11-38-08-0a-fhd-cmd.dtsi
+	sed -i 's/<70>/<695>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-k11a-38-08-0a-dsc-cmd.dtsi
+	sed -i 's/<71>/<710>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j1s*
+	sed -i 's/<71>/<710>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j2*
+	sed -i 's/<155>/<1544>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j3s-37-02-0a-dsc-video.dtsi
+	sed -i 's/<155>/<1545>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j11-38-08-0a-fhd-cmd.dtsi
+	sed -i 's/<155>/<1546>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-k11a-38-08-0a-dsc-cmd.dtsi
+	sed -i 's/<154>/<1537>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j1s*
+	sed -i 's/<154>/<1537>/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j2*
+}
+
+# Enable back mi smartfps while disabling qsync min refresh-rate
+function miui_fix_fps()
+{
+	sed -i 's/qcom,mdss-dsi-qsync-min-refresh-rate/\/\/qcom,mdss-dsi-qsync-min-refresh-rate/g'  arch/arm64/boot/dts/vendor/qcom/dsi-panel*
+	sed -i 's/\/\/ mi,mdss-dsi-smart-fps-max_framerate/mi,mdss-dsi-smart-fps-max_framerate/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel*
+	sed -i 's/\/\/ mi,mdss-dsi-pan-enable-smart-fps/mi,mdss-dsi-pan-enable-smart-fps/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel*
+	sed -i 's/\/\/ qcom,mdss-dsi-pan-enable-smart-fps/qcom,mdss-dsi-pan-enable-smart-fps/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel*
+
+}
+
+# Enable back refresh rates supported on MIUI
+function miui_fix_dfps()
+{
+	sed -i 's/120 90 60/120 90 60 50 30/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-g7a-37-02-0a-dsc-video.dtsi
+	sed -i 's/120 90 60/120 90 60 50 30/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-g7a-37-02-0b-dsc-video.dtsi
+	sed -i 's/120 90 60/120 90 60 50 30/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-g7a-36-02-0c-dsc-video.dtsi
+	sed -i 's/144 120 90 60/144 120 90 60 50 48 30/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel-j3s-37-02-0a-dsc-video.dtsi
+}
+
+# Enable back MI fod dimlayer support on MIUI
+function miui_fix_fod()
+{
+	sed -i 's/\/\/ mi,mdss-dsi-panel-fod-dimlayer-enabled/mi,mdss-dsi-panel-fod-dimlayer-enabled/g' arch/arm64/boot/dts/vendor/qcom/dsi-panel*
+}
+
+make ARCH=arm64 \
+        O=${OUT_DIR} \
+        ${DEVICE}_defconfig \
+        -j"$(nproc --all)"
+
+if [[ "$@" =~ "miui"* ]]; then
+	# Enable LLD
+	scripts/config --file ${OUT_DIR}/.config \
+		-e MIHW \
+		-e MILLET \
+		-e MI_RECLAIM \
+		-e BINDER_OPT \
+		-e KPERFEVENTS \
+		-e PERF_HUMANTASK \
+
+	# Make olddefconfig
+	cd ${OUT_DIR}
+	make O=${OUT_DIR} \
+		ARCH=arm64 \
+		olddefconfig
+	cd ../
+
+	miui_fix_dimens
+	miui_fix_fps
+	miui_fix_dfps
+	miui_fix_fod
+fi
+
+# Let's build
+START=$(date +"%s")
+
+make ARCH=arm64 \
+        O=${OUT_DIR} \
+        LLVM=1 \
+        CROSS_COMPILE="aarch64-linux-gnu-" \
+        CROSS_COMPILE_ARM32="arm-linux-gnueabi-" \
+        -j"$(nproc --all)"
+
+# Import Anykernel3 folder
+if [ $DEVICE == alioth ]; then
+        cp -r ${HOME}/anykernel-vb "$(pwd)"/anykernel
+else
+        cp -r ${HOME}/anykernel "$(pwd)"/
+fi
+
+find ${OUT_DIR}/arch/arm64/boot/dts/vendor/qcom -name '*.dtb' -exec cat {} + > ${OUT_DIR}/arch/arm64/boot/dtb
+
+cp "$(pwd)"/${OUT_DIR}/arch/arm64/boot/Image.gz "$(pwd)"/anykernel/
+cp "$(pwd)"/${OUT_DIR}/arch/arm64/boot/dtb "$(pwd)"/anykernel/
+cp "$(pwd)"/${OUT_DIR}/arch/arm64/boot/dtbo.img "$(pwd)"/anykernel/
+
+cd anykernel/ || exit
+zip -r9 "${ZIPNAME}" ./*
+CHECKER=$(ls -l "${ZIPNAME}" | awk '{print $5}')
+if (($((CHECKER / 1048576)) > 5)); then
+        curl --upload-file "${ZIPNAME}" https://transfer.sh/"${ZIPNAME}"
+else
+        echo -e '\033[01;31m' "kernel compilation unsuccesfull" || exit
+fi
+cd ../
+
+# Cleanup
+rm -fr anykernel/
+rm ${OUT_DIR}/.version
+rm ${OUT_DIR}/arch/arm64/boot/Image.gz
+rm ${OUT_DIR}/arch/arm64/boot/dtb
+rm ${OUT_DIR}/arch/arm64/boot/dtbo.img
+
+if [[ "$@" =~ "miui"* ]]; then
+	git checkout arch/arm64/boot/dts/vendor
+fi
+
+END=$(date +"%s")
+DIFF=$(( END - START))
+echo -e '\033[01;32m' "Kernel compiled successfully in $((DIFF / 60)) minute(s) and $((DIFF % 60)) seconds" || exit
